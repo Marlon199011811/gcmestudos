@@ -41,6 +41,8 @@
   --font-mono: 'IBM Plex Mono', monospace;
 }
 *{box-sizing:border-box; margin:0; padding:0;}
+/* Garante que [hidden] sempre vença as regras de #app/#auth-screen (especificidade de ID) */
+[hidden]{ display:none !important; }
 body{
   background: var(--bg);
   color: var(--text);
