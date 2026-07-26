@@ -335,6 +335,22 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
 .week-card .wk-hours .fig{ font-size:18px; color:var(--text); }
 .week-card .wk-hours .fig small{ color:var(--text-faint); font-size:11px; }
 
+/* heatmap de constância */
+.heatmap-wrap{ overflow-x:auto; padding-bottom:4px; }
+.heatmap{ display:inline-grid; grid-auto-flow:column; grid-template-rows: repeat(7, 12px); gap:3px; }
+.heatmap .cell{ width:12px; height:12px; border-radius:2px; background:var(--bg-alt); border:1px solid var(--line); }
+.heatmap .cell[data-level="1"]{ background: rgba(78,139,99,.35); border-color:transparent; }
+.heatmap .cell[data-level="2"]{ background: rgba(78,139,99,.6); border-color:transparent; }
+.heatmap .cell[data-level="3"]{ background: rgba(78,139,99,.85); border-color:transparent; }
+.heatmap .cell[data-level="4"]{ background: var(--guard-bright); border-color:transparent; }
+.heatmap .cell.future{ background:transparent; border-color: var(--line); opacity:.4; }
+.heatmap-legend{ display:flex; align-items:center; gap:4px; margin-top:10px; font-size:11px; color:var(--text-faint); }
+.heatmap-legend .cell{ width:10px; height:10px; border-radius:2px; border:1px solid var(--line); }
+.heatmap-legend .cell[data-level="1"]{ background: rgba(78,139,99,.35); border-color:transparent; }
+.heatmap-legend .cell[data-level="2"]{ background: rgba(78,139,99,.6); border-color:transparent; }
+.heatmap-legend .cell[data-level="3"]{ background: rgba(78,139,99,.85); border-color:transparent; }
+.heatmap-legend .cell[data-level="4"]{ background: var(--guard-bright); border-color:transparent; }
+
 /* técnicas */
 .tech-card{
   background: var(--panel); border:1px solid var(--line); border-radius: var(--radius);
@@ -470,6 +486,31 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
           <div class="lbl">Revisões atrasadas</div>
           <div class="val" id="kpi-overdue">0</div>
         </div>
+      </div>
+
+      <div class="panel">
+        <h3>Constância de estudo
+          <span class="eyebrow dim" id="heatmap-range" style="font-weight:400; text-transform:none; letter-spacing:0;"></span>
+        </h3>
+        <div class="heatmap-wrap">
+          <div class="heatmap" id="heatmap-grid"></div>
+        </div>
+        <div class="heatmap-legend">
+          <span>menos</span>
+          <span class="cell" data-level="0"></span>
+          <span class="cell" data-level="1"></span>
+          <span class="cell" data-level="2"></span>
+          <span class="cell" data-level="3"></span>
+          <span class="cell" data-level="4"></span>
+          <span>mais</span>
+        </div>
+      </div>
+
+      <div class="panel chart-wide">
+        <h3>Evolução da pontuação ponderada e do % médio de domínio
+          <span class="eyebrow dim" id="chart-progress-note" style="font-weight:400; text-transform:none; letter-spacing:0;">O histórico é construído a partir de hoje — volte amanhã para ver a curva se formando</span>
+        </h3>
+        <canvas id="chart-progress"></canvas>
       </div>
 
       <div class="chart-grid">
@@ -801,7 +842,8 @@ const TECNICAS = [
 let currentUser = null;
 let progressMap = {};   // topicId -> {status, percent, studyDate, obs}
 let logs = [];           // [{id, date, disciplina, tema, tecnica, min, questoes, acertos, obs}]
-let unsubProgress = null, unsubLogs = null;
+let snapshotsHistory = []; // [{id: "YYYY-MM-DD", weightedScore, avgPercent, totalHours}] — 1 por dia
+let unsubProgress = null, unsubLogs = null, unsubSnapshots = null;
 let charts = {};
 let sortByPriority = false;
 
@@ -897,6 +939,7 @@ onAuthStateChanged(auth, (user) => {
     document.getElementById("auth-screen").hidden = false;
     if(unsubProgress) unsubProgress();
     if(unsubLogs) unsubLogs();
+    if(unsubSnapshots) unsubSnapshots();
   }
 });
 
@@ -918,6 +961,31 @@ function attachListeners(uid){
     logs.sort((a,b) => new Date(a.date) - new Date(b.date));
     renderAll();
   }, (err) => toast("Erro ao carregar registros: " + err.message, true));
+
+  const snapshotsCol = collection(db, "users", uid, "snapshots");
+  unsubSnapshots = onSnapshot(snapshotsCol, (snap) => {
+    snapshotsHistory = [];
+    snap.forEach(d => snapshotsHistory.push({ id: d.id, ...d.data() }));
+    snapshotsHistory.sort((a,b) => a.id.localeCompare(b.id));
+    renderChartProgress();
+  }, (err) => toast("Erro ao carregar histórico: " + err.message, true));
+}
+
+// grava (ou atualiza) o snapshot do dia de hoje — cada dia vira 1 ponto fixo
+// no gráfico de evolução; dias passados nunca são reescritos.
+async function saveSnapshotToday(weightedScore, avgPercent, totalHours){
+  if(!currentUser) return;
+  const today = isoDate(TODAY);
+  try{
+    await setDoc(doc(db, "users", currentUser.uid, "snapshots", today), {
+      weightedScore: +weightedScore.toFixed(1),
+      avgPercent: Math.round(avgPercent),
+      totalHours: +totalHours.toFixed(1),
+      updatedAt: serverTimestamp(),
+    }, { merge:true });
+  }catch(err){
+    console.warn("Não foi possível salvar snapshot diário:", err.message);
+  }
 }
 
 async function saveProgress(topicId, patch){
@@ -1249,6 +1317,9 @@ function renderDashboard(){
   renderChartPoints();
   renderChartAccuracy();
   renderChartHours();
+  renderChartProgress();
+  renderHeatmap();
+  saveSnapshotToday(weightedScore, avgPercent, totalHours);
 }
 
 // conta quantas revisões (repetição espaçada +1/+7/+15/+30) já venceram e ainda
@@ -1392,6 +1463,71 @@ function renderChartAccuracy(){
       }
     }
   });
+}
+
+function renderChartProgress(){
+  destroyChart("progress");
+  document.getElementById("chart-progress-note").style.display = snapshotsHistory.length > 1 ? "none" : "inline";
+
+  const labels = snapshotsHistory.map(s => fmtDate(s.id));
+  const scoreData = snapshotsHistory.map(s => s.weightedScore || 0);
+  const domData = snapshotsHistory.map(s => s.avgPercent || 0);
+
+  const ctx = document.getElementById("chart-progress");
+  charts.progress = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label:"Pontuação ponderada (pts)", data: scoreData, borderColor:"#C9A227", backgroundColor:"rgba(201,162,39,.10)", tension:.25, pointRadius:3, fill:false },
+        { label:"% médio de domínio", data: domData, borderColor:"#4A7A93", backgroundColor:"rgba(74,122,147,.10)", tension:.25, pointRadius:3, fill:false },
+      ]
+    },
+    options: {
+      plugins: { legend: { position:"top", labels:{ boxWidth:10, font:{size:10.5} } } },
+      scales: {
+        y: { min:0, max:100, grid:{ color:"#212B31" } },
+        x: { grid:{ display:false }, ticks:{ font:{size:9.5}, maxTicksLimit:10 } }
+      }
+    }
+  });
+}
+
+// heatmap de constância — 1 quadrado por dia, cor por intensidade de minutos
+// estudados naquele dia (agregado a partir do Diário de estudo)
+function renderHeatmap(){
+  const totalWeeks = 16;
+  const todayW = weekStart(TODAY);
+  const firstW = todayW - (totalWeeks-1)*7*86400000;
+
+  const dailyMin = {};
+  logs.forEach(l => {
+    const key = isoDate(l.date);
+    dailyMin[key] = (dailyMin[key]||0) + (Number(l.min)||0);
+  });
+
+  function levelOf(min){
+    if(min <= 0) return 0;
+    if(min <= 30) return 1;
+    if(min <= 60) return 2;
+    if(min <= 120) return 3;
+    return 4;
+  }
+
+  let html = "";
+  const totalDays = totalWeeks * 7;
+  for(let i=0; i<totalDays; i++){
+    const d = new Date(firstW + i*86400000);
+    const key = isoDate(d);
+    const isFuture = d > TODAY;
+    const min = dailyMin[key] || 0;
+    const lvl = isFuture ? 0 : levelOf(min);
+    const title = isFuture ? "" : `${fmtDate(d)} · ${min} min estudados`;
+    html += `<div class="cell${isFuture?" future":""}" data-level="${lvl}" title="${title}"></div>`;
+  }
+  document.getElementById("heatmap-grid").innerHTML = html;
+  document.getElementById("heatmap-range").textContent =
+    `${fmtDate(new Date(firstW))} – ${fmtDate(TODAY)}`;
 }
 
 function renderChartHours(){
