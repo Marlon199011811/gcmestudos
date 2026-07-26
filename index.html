@@ -446,7 +446,8 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
       <div class="nav-item" data-view="revisoes"><span class="n">03</span> Agenda de Revisões</div>
       <div class="nav-item" data-view="cronograma"><span class="n">04</span> Cronograma</div>
       <div class="nav-item" data-view="registro"><span class="n">05</span> Registro Diário</div>
-      <div class="nav-item" data-view="tecnicas"><span class="n">06</span> Técnicas de Estudo</div>
+      <div class="nav-item" data-view="simulados"><span class="n">06</span> Simulados</div>
+      <div class="nav-item" data-view="tecnicas"><span class="n">07</span> Técnicas de Estudo</div>
     </nav>
 
     <div class="side-foot">
@@ -604,6 +605,10 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
         <h1>Cronograma até a prova</h1>
         <div class="sub" id="cronograma-sub">—</div>
       </div>
+      <div class="toolbar">
+        <label class="eyebrow dim" style="font-weight:400; text-transform:none; letter-spacing:0;">Meta de horas por semana</label>
+        <input type="number" id="input-weekly-goal" min="1" max="80" style="width:70px;" value="10">
+      </div>
       <div id="cronograma-list"></div>
     </section>
 
@@ -639,6 +644,48 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
         <table class="data">
           <thead><tr><th>Data</th><th>Disciplina</th><th>Tema</th><th>Técnica</th><th>Min</th><th>Questões</th><th>% Acerto</th><th></th></tr></thead>
           <tbody id="tbody-registro"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ---------------- SIMULADOS ---------------- -->
+    <section class="view" id="view-simulados">
+      <div class="page-head">
+        <div class="eyebrow">Avaliação</div>
+        <h1>Simulados completos</h1>
+        <div class="sub">Sessões registradas no Diário com técnica "Simulado" aparecem aqui, comparadas à sua meta de nota.</div>
+      </div>
+
+      <div class="kpi-grid" style="grid-template-columns:repeat(3,1fr);">
+        <div class="kpi-card brass">
+          <div class="lbl">Último simulado</div>
+          <div class="val" id="kpi-sim-last">— <span>%</span></div>
+        </div>
+        <div class="kpi-card guard">
+          <div class="lbl">Média dos últimos 3</div>
+          <div class="val" id="kpi-sim-avg3">— <span>%</span></div>
+        </div>
+        <div class="kpi-card info">
+          <div class="lbl">Meta de nota</div>
+          <div class="val">
+            <input type="number" id="input-sim-goal" min="0" max="100" value="70"
+              style="width:64px; background:var(--bg-alt); border:1px solid var(--line); color:#7FB4CC; font-family:var(--font-mono); font-size:20px; font-weight:600; border-radius:3px; padding:2px 6px;">
+            <span>%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel chart-wide">
+        <h3>Evolução da nota nos simulados
+          <span class="eyebrow dim" id="chart-sim-note" style="font-weight:400; text-transform:none; letter-spacing:0;">Registre um simulado no Diário de Estudo para começar</span>
+        </h3>
+        <canvas id="chart-simulados"></canvas>
+      </div>
+
+      <div class="table-wrap">
+        <table class="data">
+          <thead><tr><th>Data</th><th>Tema/Bloco</th><th>Questões</th><th>Acertos</th><th>Nota</th></tr></thead>
+          <tbody id="tbody-simulados"></tbody>
         </table>
       </div>
     </section>
@@ -843,7 +890,8 @@ let currentUser = null;
 let progressMap = {};   // topicId -> {status, percent, studyDate, obs}
 let logs = [];           // [{id, date, disciplina, tema, tecnica, min, questoes, acertos, obs}]
 let snapshotsHistory = []; // [{id: "YYYY-MM-DD", weightedScore, avgPercent, totalHours}] — 1 por dia
-let unsubProgress = null, unsubLogs = null, unsubSnapshots = null;
+let userSettings = { weeklyGoalHours: 10, simuladoGoalPercent: 70 };
+let unsubProgress = null, unsubLogs = null, unsubSnapshots = null, unsubSettings = null;
 let charts = {};
 let sortByPriority = false;
 
@@ -940,6 +988,7 @@ onAuthStateChanged(auth, (user) => {
     if(unsubProgress) unsubProgress();
     if(unsubLogs) unsubLogs();
     if(unsubSnapshots) unsubSnapshots();
+    if(unsubSettings) unsubSettings();
   }
 });
 
@@ -969,6 +1018,33 @@ function attachListeners(uid){
     snapshotsHistory.sort((a,b) => a.id.localeCompare(b.id));
     renderChartProgress();
   }, (err) => toast("Erro ao carregar histórico: " + err.message, true));
+
+  const settingsRef = doc(db, "users", uid, "meta", "config");
+  unsubSettings = onSnapshot(settingsRef, (snap) => {
+    if(snap.exists()){
+      const d = snap.data();
+      userSettings = {
+        weeklyGoalHours: d.weeklyGoalHours ?? 10,
+        simuladoGoalPercent: d.simuladoGoalPercent ?? 70,
+      };
+    }
+    document.getElementById("input-weekly-goal").value = userSettings.weeklyGoalHours;
+    document.getElementById("input-sim-goal").value = userSettings.simuladoGoalPercent;
+    renderCronograma();
+    renderSimulados();
+  }, (err) => toast("Erro ao carregar metas: " + err.message, true));
+}
+
+// grava a meta semanal de horas e a meta de nota nos simulados — 1 documento
+// único por usuário em users/{uid}/meta/config
+async function saveSettings(patch){
+  if(!currentUser) return;
+  userSettings = { ...userSettings, ...patch };
+  try{
+    await setDoc(doc(db, "users", currentUser.uid, "meta", "config"), userSettings, { merge:true });
+  }catch(err){
+    toast("Não foi possível salvar a meta: " + err.message, true);
+  }
 }
 
 // grava (ou atualiza) o snapshot do dia de hoje — cada dia vira 1 ponto fixo
@@ -1052,6 +1128,15 @@ document.getElementById("btn-sort-priority").addEventListener("click", () => {
   document.getElementById("btn-sort-priority").textContent =
     sortByPriority ? "Ordenar por prioridade ▴ (ativo)" : "Ordenar por prioridade ▾";
   renderConteudo();
+});
+
+document.getElementById("input-weekly-goal").addEventListener("change", (e) => {
+  const v = Math.max(1, Math.min(80, Number(e.target.value) || 10));
+  saveSettings({ weeklyGoalHours: v });
+});
+document.getElementById("input-sim-goal").addEventListener("change", (e) => {
+  const v = Math.max(0, Math.min(100, Number(e.target.value) || 70));
+  saveSettings({ simuladoGoalPercent: v });
 });
 
 // =====================================================================
@@ -1196,7 +1281,7 @@ function renderCronograma(){
       meta = "Revisar 100% dos blocos com % Domínio < 80 e resolver ao menos 1 simulado completo (80 questões)";
     }
 
-    const hoursPlanned = 10;
+    const hoursPlanned = userSettings.weeklyGoalHours || 10;
     const hoursDone = logs.filter(l => {
       const d = new Date(l.date);
       return d >= start && d <= end;
@@ -1280,6 +1365,59 @@ function renderRegistro(){
     `<div class="tech-card"><h4>${t}</h4><p>${d}</p></div>`
   ).join("");
 })();
+
+// =====================================================================
+// 12b. RENDER — SIMULADOS COMPLETOS
+// =====================================================================
+function renderSimulados(){
+  const sims = logs
+    .filter(l => l.tecnica === "Simulado" && Number(l.questoes) > 0)
+    .sort((a,b) => new Date(a.date) - new Date(b.date))
+    .map(l => ({ ...l, nota: Math.round((Number(l.acertos)||0) / Number(l.questoes) * 100) }));
+
+  const goal = userSettings.simuladoGoalPercent ?? 70;
+
+  const last = sims[sims.length - 1];
+  document.getElementById("kpi-sim-last").innerHTML = last ? `${last.nota} <span>%</span>` : `— <span>%</span>`;
+  const last3 = sims.slice(-3);
+  const avg3 = last3.length ? Math.round(last3.reduce((a,n) => a+n.nota, 0) / last3.length) : null;
+  document.getElementById("kpi-sim-avg3").innerHTML = avg3 !== null ? `${avg3} <span>%</span>` : `— <span>%</span>`;
+
+  destroyChart("simulados");
+  document.getElementById("chart-sim-note").style.display = sims.length ? "none" : "inline";
+  const labels = sims.map(n => fmtDate(n.date));
+  const ctx = document.getElementById("chart-simulados");
+  charts.simulados = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label:"Nota (%)", data: sims.map(n=>n.nota), borderColor:"#C9A227", backgroundColor:"rgba(201,162,39,.12)", tension:.2, pointRadius:4, pointBackgroundColor:"#C9A227", fill:true },
+        { label:`Meta (${goal}%)`, data: labels.map(()=>goal), borderColor:"#8FA0A8", borderDash:[6,4], pointRadius:0, fill:false },
+      ]
+    },
+    options: {
+      plugins: { legend: { position:"top", labels:{ boxWidth:10, font:{size:10.5} } } },
+      scales: {
+        y: { min:0, max:100, grid:{ color:"#212B31" }, ticks:{ callback:v=>v+"%" } },
+        x: { grid:{ display:false }, ticks:{ font:{size:9.5}, maxTicksLimit:10 } }
+      }
+    }
+  });
+
+  const tbody = document.getElementById("tbody-simulados");
+  if(sims.length === 0){
+    tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state"><div class="big">Nenhum simulado registrado</div>No Diário de Estudo, escolha "Simulado" como técnica ao registrar uma sessão.</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = sims.slice().reverse().map(n => `<tr>
+    <td>${fmtDate(n.date)}</td>
+    <td>${n.tema||"—"}</td>
+    <td>${n.questoes}</td>
+    <td>${n.acertos}</td>
+    <td><span class="pill ${n.nota>=goal?"st-4":"st-0"}">${n.nota}%</span></td>
+  </tr>`).join("");
+}
 
 // =====================================================================
 // 13. RENDER — DASHBOARD (KPIs + gráficos)
@@ -1553,6 +1691,7 @@ function renderAll(){
   renderRevisoes();
   renderCronograma();
   renderRegistro();
+  renderSimulados();
 }
 
 </script>
