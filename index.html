@@ -245,7 +245,7 @@ nav#nav-list{ flex:1; padding: 10px; overflow-y:auto; }
 
 /* ---------- KPI CARDS ---------- */
 .kpi-grid{
-  display:grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px;
+  display:grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-bottom: 26px;
 }
 .kpi-card{
   background: var(--panel); border:1px solid var(--line); border-radius: var(--radius);
@@ -257,6 +257,8 @@ nav#nav-list{ flex:1; padding: 10px; overflow-y:auto; }
 .kpi-card.brass{ border-top-color: var(--brass); } .kpi-card.brass .val{ color: var(--brass); }
 .kpi-card.guard{ border-top-color: var(--guard-bright); } .kpi-card.guard .val{ color: var(--guard-bright); }
 .kpi-card.info{ border-top-color: var(--info); } .kpi-card.info .val{ color: #7FB4CC; }
+.kpi-card.danger{ border-top-color: var(--danger); } .kpi-card.danger .val{ color: #E08278; }
+.kpi-card.danger .val.zero{ color: var(--text); }
 
 .panel{
   background: var(--panel); border:1px solid var(--line); border-radius: var(--radius);
@@ -464,6 +466,10 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
           <div class="lbl">Horas totais estudadas</div>
           <div class="val" id="kpi-hours">0.0 <span>h</span></div>
         </div>
+        <div class="kpi-card danger">
+          <div class="lbl">Revisões atrasadas</div>
+          <div class="val" id="kpi-overdue">0</div>
+        </div>
       </div>
 
       <div class="chart-grid">
@@ -480,6 +486,13 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
       <div class="panel chart-wide">
         <h3>Pontos do edital × pontos já dominados</h3>
         <canvas id="chart-points"></canvas>
+      </div>
+
+      <div class="panel chart-wide">
+        <h3>Evolução da taxa de acerto (semanal)
+          <span class="eyebrow dim" id="chart-accuracy-note" style="font-weight:400; text-transform:none; letter-spacing:0;">Registre questões no Diário para alimentar este gráfico</span>
+        </h3>
+        <canvas id="chart-accuracy"></canvas>
       </div>
 
       <div class="panel chart-wide">
@@ -1226,10 +1239,32 @@ function renderDashboard(){
   document.getElementById("kpi-avg").innerHTML = `${Math.round(avgPercent)}<span>%</span>`;
   document.getElementById("kpi-hours").innerHTML = `${totalHours.toFixed(1)} <span>h</span>`;
 
+  const overdue = countOverdueReviews();
+  const kpiOverdueEl = document.getElementById("kpi-overdue");
+  kpiOverdueEl.textContent = overdue;
+  kpiOverdueEl.className = "val" + (overdue === 0 ? " zero" : "");
+
   renderChartDiscipline();
   renderChartStatus();
   renderChartPoints();
+  renderChartAccuracy();
   renderChartHours();
+}
+
+// conta quantas revisões (repetição espaçada +1/+7/+15/+30) já venceram e ainda
+// não tiveram a data de estudo do bloco atualizada para depois delas
+function countOverdueReviews(){
+  let count = 0;
+  TOPICS.forEach(t => {
+    const p = getProgress(t.id);
+    if(!p.studyDate) return;
+    const base = new Date(p.studyDate);
+    [1,7,15,30].forEach(off => {
+      const d = addDays(base, off);
+      if(daysBetween(TODAY, d) < 0) count++;
+    });
+  });
+  return count;
 }
 
 const CHART_FONT = { family: "Inter", size: 11 };
@@ -1298,6 +1333,63 @@ function renderChartPoints(){
     options: {
       plugins: { legend: { position:"top", labels:{ boxWidth:10, font:{size:10.5} } } },
       scales: { x: { grid:{display:false}, ticks:{font:{size:9.5}} }, y: { grid:{color:"#212B31"} } }
+    }
+  });
+}
+
+// retorna o timestamp (ms) da segunda-feira da semana de uma data — usado
+// como chave de agrupamento para o gráfico de evolução da taxa de acerto
+function weekStart(date){
+  const d = new Date(date);
+  d.setHours(0,0,0,0);
+  const dow = (d.getDay() + 6) % 7; // 0 = segunda-feira
+  d.setDate(d.getDate() - dow);
+  return d.getTime();
+}
+
+function renderChartAccuracy(){
+  destroyChart("accuracy");
+  const comQuestoes = logs
+    .filter(l => Number(l.questoes) > 0)
+    .sort((a,b) => new Date(a.date) - new Date(b.date));
+
+  const buckets = {};
+  comQuestoes.forEach(l => {
+    const key = weekStart(l.date);
+    if(!buckets[key]) buckets[key] = { acertos:0, questoes:0 };
+    buckets[key].acertos += Number(l.acertos) || 0;
+    buckets[key].questoes += Number(l.questoes) || 0;
+  });
+
+  const weekKeys = Object.keys(buckets).map(Number).sort((a,b) => a-b);
+  const labels = weekKeys.map(k => "sem. " + fmtDate(new Date(k)));
+  const data = weekKeys.map(k => +((buckets[k].acertos / buckets[k].questoes) * 100).toFixed(1));
+
+  document.getElementById("chart-accuracy-note").style.display = weekKeys.length ? "none" : "inline";
+
+  const ctx = document.getElementById("chart-accuracy");
+  charts.accuracy = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        label: "% de acerto (média semanal)",
+        data,
+        borderColor: "#4E8B63",
+        backgroundColor: "rgba(78,139,99,.14)",
+        fill: true,
+        tension: .25,
+        pointRadius: 3,
+        pointBackgroundColor: "#4E8B63",
+        spanGaps: true,
+      }]
+    },
+    options: {
+      plugins: { legend: { display:false } },
+      scales: {
+        y: { min:0, max:100, grid:{ color:"#212B31" }, ticks:{ callback:v=>v+"%" } },
+        x: { grid:{ display:false }, ticks:{ font:{size:9.5}, maxTicksLimit:10 } }
+      }
     }
   });
 }
