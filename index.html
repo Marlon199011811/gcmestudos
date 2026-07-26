@@ -186,12 +186,56 @@ input, select, textarea{ font-family: inherit; }
   border-right: 1px solid var(--line);
   display:flex; flex-direction:column;
   position: sticky; top:0; height:100vh;
+  overflow: hidden;
+  transition: width .18s ease, min-width .18s ease;
 }
 .side-head{
   padding: 20px 18px 16px;
   border-bottom: 1px solid var(--line);
   display:flex; align-items:center; gap:10px;
 }
+
+/* ---------- RECOLHER MENU LATERAL ---------- */
+.btn-collapse{
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 26px; height: 26px;
+  display:flex; align-items:center; justify-content:center;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  transition: background .12s, color .12s, border-color .12s;
+}
+.btn-collapse:hover{ background: var(--panel-2); color: var(--text); border-color: var(--text-dim); }
+
+.sidebar-reopen{
+  display:none;
+  position: fixed;
+  top: 18px; left: 18px;
+  z-index: 30;
+  width: 34px; height: 34px;
+  align-items:center; justify-content:center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  box-shadow: 0 2px 10px rgba(0,0,0,.35);
+  transition: background .12s, color .12s, border-color .12s;
+}
+.sidebar-reopen:hover{ background: var(--panel-2); color: var(--text); border-color: var(--text-dim); }
+
+#app.sidebar-collapsed #sidebar{
+  width: 0;
+  min-width: 0;
+  border-right: none;
+}
+#app.sidebar-collapsed #sidebar > *{
+  opacity: 0;
+  pointer-events: none;
+}
+#app.sidebar-collapsed .sidebar-reopen{ display:flex; }
+#app.sidebar-collapsed #main{ padding-left: 70px; }
 .side-head .badge-mark{ width:36px; height:36px; font-size:14px; }
 .side-head .badge-mark::before{ inset:-5px; }
 .side-head h2{
@@ -433,6 +477,9 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
         <h2>Posto de Estudo</h2>
         <div class="sub">GMPV · EDITAL Nº 01/2026</div>
       </div>
+      <button class="btn-collapse" id="btn-collapse-sidebar" title="Recolher menu" aria-label="Recolher menu lateral">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 6 9 12 15 18"></polyline></svg>
+      </button>
     </div>
 
     <div class="countdown-block">
@@ -455,6 +502,10 @@ table.data input[type=date]{ width: 128px; font-family: var(--font-mono); }
       <button class="btn ghost small block" id="btn-logout">Sair</button>
     </div>
   </aside>
+
+  <button class="sidebar-reopen" id="btn-reopen-sidebar" title="Expandir menu" aria-label="Expandir menu lateral">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 6 15 12 9 18"></polyline></svg>
+  </button>
 
   <main id="main">
 
@@ -974,6 +1025,25 @@ function traduzErroAuth(code){
 }
 
 document.getElementById("btn-logout").addEventListener("click", () => signOut(auth));
+
+// ---------- Recolher / expandir menu lateral ----------
+(function(){
+  const appEl = document.getElementById("app");
+  const btnCollapse = document.getElementById("btn-collapse-sidebar");
+  const btnReopen = document.getElementById("btn-open-sidebar") || document.getElementById("btn-reopen-sidebar");
+
+  function setSidebarCollapsed(collapsed){
+    appEl.classList.toggle("sidebar-collapsed", collapsed);
+    try{ localStorage.setItem("pe-sidebar-collapsed", collapsed ? "1" : "0"); }catch(e){}
+  }
+
+  btnCollapse.addEventListener("click", () => setSidebarCollapsed(true));
+  btnReopen.addEventListener("click", () => setSidebarCollapsed(false));
+
+  let saved = "0";
+  try{ saved = localStorage.getItem("pe-sidebar-collapsed") || "0"; }catch(e){}
+  setSidebarCollapsed(saved === "1");
+})();
 
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
